@@ -31,11 +31,6 @@ Tid_t sys_CreateThread(Task task, int argl, void* args)
    // Initialize arguments, like I did in sys_Exec
   if(task != NULL){
 
-      TCB* new_tcb = spawn_thread(CURPROC, start_process_thread);  // Initialize and return a new TCB
-      PCB* curproc = CURPROC;
-      curproc->thread_count ++;
-
-
       PTCB* ptcb = (PTCB* )xmalloc(sizeof(PTCB));   // Memory allocation for a PTCB block 
      
       ptcb->task = task;
@@ -46,6 +41,10 @@ Tid_t sys_CreateThread(Task task, int argl, void* args)
       ptcb->detached = 0;
       ptcb->exit_cv = COND_INIT;
       ptcb->refcount = 1;
+
+      TCB* new_tcb = spawn_thread(CURPROC, start_process_thread);  // Initialize and return a new TCB
+      PCB* curproc = CURPROC;
+      curproc->thread_count ++;
       
       // Connections through PTCB, TCB
       ptcb->tcb = new_tcb; // PTCB with new_TCB
@@ -84,8 +83,12 @@ int sys_ThreadJoin(Tid_t tid, int* exitval)
   //  return 0;
   //}
 
+  //if(tid<0){
+  // return -1;
+  //}
+
   // First, some checks to see if i can join
-  if((Tid_t) (cur_thread()->ptcb) == tid || (cur_thread()->ptcb->refcount) == 0){      // Cannot join self obviously...
+  if((Tid_t) (cur_thread()->ptcb) == tid){ //|| (cur_thread()->ptcb->refcount) == 0){      // Cannot join self obviously...
     return -1;
   }
 
@@ -102,27 +105,26 @@ int sys_ThreadJoin(Tid_t tid, int* exitval)
 
   // If you passed the checks, congratulations, now you have to wait and sleep, until the thread running finishes its work
   // If there is a thread running right now, it has to put to sleep all other threads joining.
-  while(ptcb->detached == 0  && ptcb->exited == 0){
-    //if(ptcb->tcb->owner_pcb->parent->exitval == 1)
-    // return 0;
     ptcb->refcount = ptcb->refcount + 1; // there is a new ptcb in town 
-    kernel_wait(&(ptcb->exit_cv), SCHED_USER);      // kernel_wait puts to temporary sleep incoming threads, waiting for the condvar of current thread to become detached or exited
-    // Saving the exit value...
-    //exitval = &(ptcb->exitval);
-    ptcb->refcount = ptcb->refcount - 1; // ptcb has left the chat
+    while(ptcb->detached == 0  && ptcb->exited == 0){
+      //if(ptcb->tcb->owner_pcb->parent->exitval == 1)
+      // return 0;
+      kernel_wait(&(ptcb->exit_cv), SCHED_USER);      // kernel_wait puts to temporary sleep incoming threads, waiting for the condvar of current thread to become detached or exited
+      // Saving the exit value...
+      exitval = &(ptcb->exitval);
+      ptcb->refcount = ptcb->refcount - 1; // ptcb has left the chat
+    }
 
-  }
 
   if(exitval!=NULL){
     exitval = &(ptcb->exitval);
     return 0;
-  } else {exitval = NULL;}
+  }
 
   // You are alone... Bye...
-  if(ptcb->refcount <= 0){
-    if(ptcb->exited == 1){
+  if(ptcb->refcount == 0){
       rlist_remove(&(ptcb->ptcb_list_node));
-    }
+      free(ptcb);
   }
   return 0;
 }
@@ -143,6 +145,8 @@ int sys_ThreadDetach(Tid_t tid)
     return -1;
   }
 
+
+
   if(ptcb->exited == 0){
     if(ptcb->refcount>0){
       // Detaching current and waking up next in line...
@@ -152,8 +156,8 @@ int sys_ThreadDetach(Tid_t tid)
     ptcb->detached = 1;
 
    //Current thread you are detached, free to go
-   // ptcb->detached == 1;
-   // free(ptcb);
+   // ptcb->detached = 1;
+   // rlist_remove(&ptcb->ptcb_list_node);
     return 0;
 }
 return -1;
@@ -180,7 +184,7 @@ if(ptcb!=NULL){
 
 
   // See you soon...
-  if(cur_thread()->ptcb->refcount <= 0){
+  if(cur_thread()->ptcb->refcount < 0){
     free(cur_thread()->ptcb);
     curproc->thread_count = curproc->thread_count -1;
   }
