@@ -504,7 +504,8 @@ void yield(enum SCHED_CAUSE cause)
 	// When i have SCHED_MUTEX, it means that my high priority thread wants a mutex that is currently used by a low priority thread, meaning that i have to decrease
 	// the high-priority thread so that i give the low-priority thread a chance to finish and release the wanted mutex
 	case(SCHED_MUTEX):
-		if((current->priority = current->last_cause) == SCHED_MUTEX) //&& current->priority>0)
+		//if(current->priority>0) //&& current->priority>0)
+		if(current->curr_cause == SCHED_MUTEX && current->last_cause == SCHED_MUTEX)
 			current->priority = current->priority - 1;
 	break;
 
