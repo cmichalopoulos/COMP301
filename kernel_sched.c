@@ -21,8 +21,8 @@
 /* Core control blocks */
 CCB cctx[MAX_CORES];
 
-#define PRIORITY_QUEUES 10
-#define YIELDS 50
+#define PRIORITY_QUEUES 80
+#define YIELDS 100
 
 /* 
 	The current core's CCB. This must only be used in a 
@@ -491,8 +491,8 @@ void yield(enum SCHED_CAUSE cause)
 	case (SCHED_QUANTUM):
 		if(current->priority > 0)
 			current->priority = current->priority - 1;
-		else current->priority = 0;
-	break;
+		//else current->priority = 0;
+		break;
 
 	// When the cause is SCHED_IO, it means that we have a thread waiting for I/O, which means that it will take a little time, and so give it a higher priority
 	case (SCHED_IO): 
@@ -504,9 +504,10 @@ void yield(enum SCHED_CAUSE cause)
 	// When i have SCHED_MUTEX, it means that my high priority thread wants a mutex that is currently used by a low priority thread, meaning that i have to decrease
 	// the high-priority thread so that i give the low-priority thread a chance to finish and release the wanted mutex
 	case(SCHED_MUTEX):
-		//if(current->priority>0) //&& current->priority>0)
-		if(current->curr_cause == SCHED_MUTEX && current->last_cause == SCHED_MUTEX)
+		if(current->priority > 0) //&& current->priority>0)
+		//if((current->curr_cause = current->last_cause) == SCHED_MUTEX)
 			current->priority = current->priority - 1;
+		//else current->priority = 0;
 	break;
 
 	default:
