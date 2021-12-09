@@ -31,6 +31,7 @@ Tid_t sys_CreateThread(Task task, int argl, void* args)
    // Initialize arguments, like I did in sys_Exec
   if(task != NULL){
 
+      // PTCB STUFF
       PTCB* ptcb = (PTCB* )xmalloc(sizeof(PTCB));   // Memory allocation for a PTCB block 
      
       ptcb->task = task;
@@ -42,6 +43,7 @@ Tid_t sys_CreateThread(Task task, int argl, void* args)
       ptcb->exit_cv = COND_INIT;
       ptcb->refcount = 1;
 
+      // TCB STUFF
       TCB* new_tcb = spawn_thread(CURPROC, start_process_thread);  // Initialize and return a new TCB
       PCB* curproc = CURPROC;
       curproc->thread_count ++;
@@ -92,16 +94,17 @@ int sys_ThreadJoin(Tid_t tid, int* exitval)
     return -1;
   }
 
-  if (ptcb->detached == 1 && ptcb->exited == 1) {
-    return -1;
-  } 
-
-  // Check for test_detach_other
-  if(ptcb->detached == 1){
-    if(ptcb->exitval == 0) {
+  if (ptcb->detached == 1) {
       return -1;
-    }
+    
   }
+
+  //Check for test_detach_other
+     if (ptcb->detached == 1){
+      if (ptcb->exitval == 0) 
+          return -1;
+      }
+  
 
   // If you passed the checks, congratulations, now you have to wait and sleep, until the thread running finishes its work
   // If there is a thread running right now, it has to put to sleep all other threads joining.
@@ -111,18 +114,17 @@ int sys_ThreadJoin(Tid_t tid, int* exitval)
       // return 0;
       kernel_wait(&(ptcb->exit_cv), SCHED_USER);      // kernel_wait puts to temporary sleep incoming threads, waiting for the condvar of current thread to become detached or exited
       // Saving the exit value...
-      exitval = &(ptcb->exitval);
-      ptcb->refcount = ptcb->refcount - 1; // ptcb has left the chat
+      // exitval = &(ptcb->exitval);
     }
 
+    ptcb->refcount = ptcb->refcount - 1; // ptcb has left the chat
 
-  if(exitval!=NULL){
-    exitval = &(ptcb->exitval);
-    return 0;
-  }
+    if(exitval!=NULL){
+      *exitval = ptcb->exitval;
+    }
 
   // You are alone... Bye...
-  if(ptcb->refcount == 0){
+  if(ptcb->refcount == 1){
       rlist_remove(&(ptcb->ptcb_list_node));
       free(ptcb);
   }
@@ -134,11 +136,7 @@ int sys_ThreadJoin(Tid_t tid, int* exitval)
   */
 int sys_ThreadDetach(Tid_t tid)
 {
-  if(cur_thread() == NULL){
-    return -1;
-  }
-
-
+  
   // Finding the thread to join, connecting it with ptcb
   PTCB* ptcb = (PTCB* ) tid;
   if(!rlist_find(&CURPROC->ptcb_list, ptcb, NULL)){
@@ -148,7 +146,7 @@ int sys_ThreadDetach(Tid_t tid)
 
 
   if(ptcb->exited == 0){
-    if(ptcb->refcount>0){
+    if(ptcb->refcount > 1){
       // Detaching current and waking up next in line...
       kernel_broadcast(&(ptcb->exit_cv)); // wakeup from your sleep, time to work 
       ptcb->refcount = 0;  //nobody will join you 
@@ -173,7 +171,7 @@ void sys_ThreadExit(int exitval)
 PTCB* ptcb = (cur_thread()->ptcb);
 
 // Brute exit now if someone remains...
-if(ptcb!=NULL){
+//if(ptcb!=NULL){
   ptcb->exited = 1;
   ptcb->exitval = exitval;
 
@@ -184,16 +182,15 @@ if(ptcb!=NULL){
 
 
   // See you soon...
-  if(cur_thread()->ptcb->refcount < 0){
-    free(cur_thread()->ptcb);
-    curproc->thread_count = curproc->thread_count -1;
-  }
+  //if(cur_thread()->ptcb->refcount == 0){
+  //  free(cur_thread()->ptcb);
+  //  curproc->thread_count = curproc->thread_count -1;
+//  }
 
-  if(get_pid(CURPROC) == 1){
-    while(sys_WaitChild(NOPROC, NULL) != NOPROC);
-  } else {
+  if (CURPROC->thread_count == 0) {
+  if(get_pid(CURPROC) != 1){
       // If you are the final thread
-      if(curproc->thread_count==0){
+//      if(curproc->thread_count==0){
         /* Reparent any children of the exiting process to the 
         initial task */
         PCB* initpcb = get_pcb(1);
@@ -213,11 +210,10 @@ if(ptcb!=NULL){
         /* Put me into my parent's exited list */
         rlist_push_front(& curproc->parent->exited_list, &curproc->exited_node);
         kernel_broadcast(& curproc->parent->child_exit);   
-      }
-    }
+      //}
   assert(is_rlist_empty(& curproc->children_list));
   assert(is_rlist_empty(& curproc->exited_list));
-
+  }
 
     /* 
       Do all the other cleanup we want here, close files etc. 
