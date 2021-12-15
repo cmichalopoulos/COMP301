@@ -3,8 +3,8 @@
 #include <assert.h>
 #include "kernel_cc.h"
 #include "kernel_streams.h"
-
-
+#include "kernel_sysinfo.h"
+#include "tinyos.h"
 
 
 /* 
@@ -324,7 +324,7 @@ Pid_t sys_WaitChild(Pid_t cpid, int* status)
 void sys_Exit(int exitval)
 {
 
- PCB *curproc = CURPROC;  /* cache for efficiency */
+  PCB *curproc = CURPROC;  /* cache for efficiency */
 
   /* First, store the exit status */
   curproc->exitval = exitval;
@@ -336,15 +336,123 @@ void sys_Exit(int exitval)
 
     while(sys_WaitChild(NOPROC,NULL)!=NOPROC);
 
-  } 
-  sys_ThreadExit(exitval);
+  } else {
+
+    /* Reparent any children of the exiting process to the 
+       initial task */
+    PCB* initpcb = get_pcb(1);
+    while(!is_rlist_empty(& curproc->children_list)) {
+      rlnode* child = rlist_pop_front(& curproc->children_list);
+      child->pcb->parent = initpcb;
+      rlist_push_front(& initpcb->children_list, child);
+    }
+
+    /* Add exited children to the initial task's exited list 
+       and signal the initial task */
+    if(!is_rlist_empty(& curproc->exited_list)) {
+      rlist_append(& initpcb->exited_list, &curproc->exited_list);
+      kernel_broadcast(& initpcb->child_exit);
+    }
+
+    /* Put me into my parent's exited list */
+    rlist_push_front(& curproc->parent->exited_list, &curproc->exited_node);
+    kernel_broadcast(& curproc->parent->child_exit);
+  
+  }
+
+  assert(is_rlist_empty(& curproc->children_list));
+  assert(is_rlist_empty(& curproc->exited_list));
+
+  /* 
+    Do all the other cleanup we want here, close files etc. 
+   */
+
+  /* Release the args data */
+  if(curproc->args) {
+    free(curproc->args);
+    curproc->args = NULL;
+  }
+
+  /* Clean up FIDT */
+  for(int i=0;i<MAX_FILEID;i++) {
+    if(curproc->FIDT[i] != NULL) {
+      FCB_decref(curproc->FIDT[i]);
+      curproc->FIDT[i] = NULL;
+    }
+  }
+
+  /* Disconnect my main_thread */
+  curproc->main_thread = NULL;
+
+  /* Now, mark the process as exited. */
+  curproc->pstate = ZOMBIE;
+
+  /* Bye-bye cruel world */
+  kernel_sleep(EXITED, SCHED_USER);
+
+  //sys_ThreadExit(exitval);
 
 }
 
+// System Info Stuff
 
+int procinfo_read(void* procinfo_cb, char* buf, unsigned int size){
+  procinfo* procinfocb = (procinfo*) procinfo_cb;
+  procinf_cb* picb = (procinf_cb*)xmalloc(sizeof(procinf_cb));
+
+  for(Pid_t i=0; i<MAX_PROC; i++){
+    if(PT[i].pstate != FREE){
+      // Get pid and ppid 
+      procinfocb->pid = get_pid(&PT[i]);
+      if(PT[i].parent == 0)                       // If process is parent, then ppid = 0
+        procinfocb->ppid = 0;               
+      else 
+        procinfocb->ppid = get_pid(PT[i].parent); // else get the ppid
+
+      // Check if process is alive 
+      if(PT[i].pstate == ALIVE)
+        procinfocb->alive = 1;
+      else
+        procinfocb->alive = PT[i].pstate;
+
+      procinfocb->thread_count = PT[i].thread_count;
+      procinfocb->main_task = PT[i].main_task;
+      procinfocb->argl = PT[i].argl;
+      //memcpy(procinfocb->args, PT[i].args, PT[i].argl);
+
+      // Copy info from procinfo_cb, to the buffer that stores and shows info
+      memcpy(buf, picb->curinfo, size);
+      picb->pcb_cursor ++;
+    }
+  }
+  return size;
+}
+
+int procinfo_close(void* procinfo_cb){
+  procinf_cb* picb = (procinf_cb*) procinfo_cb;
+  free(picb);
+  return 0;
+}
+
+int procinfo_write(void* procinfo_cb, const char* buf, unsigned int size){
+  return -1;
+}
 
 Fid_t sys_OpenInfo()
 {
-	return NOFILE;
-}
+  Fid_t fid[1];
+  FCB* fcb[1];
+  int reserved = FCB_reserve(1, fid, fcb);                        // Reserve FCB from FT
+  if(reserved == 0)
+    return NOFILE;
 
+  procinf_cb* picb = (procinf_cb*)xmalloc(sizeof(procinf_cb));
+  if(picb == NULL)
+    return NOFILE;
+
+  picb->pcb_cursor = 1;                                           // Initialize everything from proc_info_control_block
+  fcb[0]->streamobj = picb;                                       // created on kernel_sysinfo.h
+  fcb[0]->streamfunc = &proc_info;
+
+  return fid[0];
+}
